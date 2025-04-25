@@ -539,7 +539,12 @@ export class TimescapeManager implements Options {
     }
 
     const ts = this.#timestamp ?? this.#prevTimestamp;
-    return ts ? format(new Date(ts), type, this.hour12, this.digits) : "";
+    const value = ts ? format(new Date(ts), type, this.hour12, this.digits) : "";
+    
+    if (type === "am/pm") {
+      return isSelectEntry(registryEntry) ? value.toLowerCase() : value;
+    }
+    return value;
   }
 
   #wrapDateAround(step: number, type: DateType) {
