@@ -353,8 +353,10 @@ export class TimescapeManager implements Options {
     element.setAttribute("role", "combobox");
     element.dataset.timescapeSelect = "";
 
-    const options = this.#getSelectOptions(type);
-    element.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    if (!element.options.length) {
+      const options = this.#getSelectOptions(type);
+      element.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+    }
 
     this.#registry.set(type, {
       type,
@@ -438,6 +440,7 @@ export class TimescapeManager implements Options {
     if (element.value === value) return;
 
     element.value = value;
+    element.dispatchEvent(new Event('change', { bubbles: true }));
     element.setAttribute("aria-label", type);
   }
 
