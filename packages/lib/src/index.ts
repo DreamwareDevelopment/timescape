@@ -126,8 +126,7 @@ export class TimescapeManager implements Options {
             mutations.forEach((mutation) => {
               mutation.removedNodes.forEach((node) => {
                 const entry = this.#findByInputElement(node);
-
-                if (!entry) return;
+                if (!entry || !isInputEntry(entry)) return;
 
                 entry.inputElement.remove();
                 entry.shadowElement.remove();
@@ -210,7 +209,11 @@ export class TimescapeManager implements Options {
     Array.from(this.#registry).forEach(([type, entry]) => {
       entry.listeners.forEach((listener) => listener());
       this.#registry.delete(type);
-      this.registerElement(entry.inputElement, type, entry.autofocus, true);
+      if (isInputEntry(entry)) {
+        this.registerElement(entry.inputElement, type, entry.autofocus, true);
+      } else if (isSelectEntry(entry)) {
+        this.registerSelect(entry.selectElement, type, true);
+      }
     });
   }
 
@@ -249,7 +252,7 @@ export class TimescapeManager implements Options {
     domExists = false,
   ) {
     const registryEntry = this.#registry.get(type);
-    if (!domExists && isInputEntry(registryEntry) && element === registryEntry?.inputElement) {
+    if (!domExists && registryEntry && isInputEntry(registryEntry) && element === registryEntry.inputElement) {
       return;
     }
 
@@ -298,7 +301,7 @@ export class TimescapeManager implements Options {
       sibling.dataset.timescapeShadow === type
     ) {
       shadowElement = sibling;
-    } else if (!domExists || !isInputEntry(registryEntry) || !registryEntry?.shadowElement) {
+    } else if (!domExists || !isInputEntry(registryEntry!) || !registryEntry?.shadowElement) {
       shadowElement = document.createElement("span");
       shadowElement.setAttribute("aria-hidden", "true");
       shadowElement.textContent = element.value || element.placeholder;
@@ -342,7 +345,7 @@ export class TimescapeManager implements Options {
     domExists = false,
   ) {
     const registryEntry = this.#registry.get(type);
-    if (!domExists && isSelectEntry(registryEntry) && element === registryEntry?.selectElement) {
+    if (!domExists && registryEntry && isSelectEntry(registryEntry) && element === registryEntry.selectElement) {
       return;
     }
 
@@ -516,26 +519,27 @@ export class TimescapeManager implements Options {
 
   #getValue(type: DateType): string {
     const registryEntry = this.#registry.get(type);
-    const intermediateValue = registryEntry?.intermediateValue;
+    if (!registryEntry) return "";
 
-    if (registryEntry?.isUnset) return "";
+    if (isInputEntry(registryEntry)) {
+      if (registryEntry.isUnset) return "";
+      const intermediateValue = registryEntry.intermediateValue;
+      if (intermediateValue) {
+        return type === "years"
+          ? intermediateValue.padStart(4, "0")
+          : intermediateValue.padStart(
+              type === "minutes" || type === "seconds"
+                ? 2
+                : this.digits === "2-digit"
+                  ? 2
+                  : 1,
+              "0",
+            );
+      }
+    }
 
     const ts = this.#timestamp ?? this.#prevTimestamp;
-
-    return intermediateValue
-      ? type === "years"
-        ? intermediateValue.padStart(4, "0")
-        : intermediateValue.padStart(
-            type === "minutes" || type === "seconds"
-              ? 2
-              : this.digits === "2-digit"
-                ? 2
-                : 1,
-            "0",
-          )
-      : ts
-        ? format(new Date(ts), type, this.hour12, this.digits)
-        : "";
+    return ts ? format(new Date(ts), type, this.hour12, this.digits) : "";
   }
 
   #wrapDateAround(step: number, type: DateType) {
@@ -585,11 +589,9 @@ export class TimescapeManager implements Options {
     if (e.defaultPrevented) return;
 
     const registryEntry = this.#findByInputElement(e.target);
-
-    if (!registryEntry) return;
+    if (!registryEntry || !isInputEntry(registryEntry)) return;
 
     const { inputElement, intermediateValue, type } = registryEntry;
-
     let allowNativeEvent = false;
 
     const key = e.key;
@@ -623,7 +625,6 @@ export class TimescapeManager implements Options {
           }
         } else {
           const factor = e.key === "ArrowUp" ? 1 : -1;
-
           step = elementStep * factor;
         }
 
@@ -835,7 +836,9 @@ export class TimescapeManager implements Options {
     requestAnimationFrame(() => {
       if (e.target !== document.activeElement) {
         const registryEntry = this.#findByInputElement(e.target);
-        if (registryEntry) this.#clearIntermediateState(registryEntry);
+        if (registryEntry && isInputEntry(registryEntry)) {
+          this.#clearIntermediateState(registryEntry);
+        }
 
         const target = e.target as HTMLInputElement;
         target.removeAttribute("aria-selected");
@@ -844,14 +847,13 @@ export class TimescapeManager implements Options {
   }
 
   #sortRegistryByElements() {
-    this.#registry = new Map(
-      [...this.#registry.entries()].sort(([, a], [, b]) =>
-        a.inputElement.compareDocumentPosition(b.inputElement) &
-        (Node.DOCUMENT_POSITION_FOLLOWING | Node.DOCUMENT_POSITION_CONTAINED_BY)
-          ? -1
-          : 1,
-      ),
-    );
+    const entries = [...this.#registry.entries()] as [string, RegistryEntry | SelectRegistryEntry][];
+    entries.sort((a, b) => {
+      const elementA = isInputEntry(a[1]) ? a[1].inputElement : a[1].selectElement;
+      const elementB = isInputEntry(b[1]) ? b[1].inputElement : b[1].selectElement;
+      return elementA.compareDocumentPosition(elementB) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    });
+    this.#registry = new Map(entries) as Registry;
   }
 
   #syncAllElements() {
@@ -982,7 +984,9 @@ export class TimescapeManager implements Options {
 
     if (nextIndex < 0 || nextIndex >= entries.length) return false;
 
-    const [, nextEntry] = entries[nextIndex];
+    const nextEntry = entries[nextIndex]?.[1];
+    if (!nextEntry) return false;
+
     if (isInputEntry(nextEntry)) {
       nextEntry.inputElement.focus();
     } else if (isSelectEntry(nextEntry)) {
