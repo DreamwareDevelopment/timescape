@@ -53,6 +53,16 @@ export const useTimescape = (options: Options = {}) => {
         if (opts?.ref) opts.ref.current = element;
       },
     }),
+    getSelectProps: (
+      type: DateType,
+      opts?: { ref?: MutableRef<HTMLSelectElement | null> },
+    ) => ({
+      ref: (element: HTMLSelectElement | null) => {
+        if (!element) return;
+        manager.registerSelect(element, type);
+        if (opts?.ref) opts.ref.current = element;
+      },
+    }),
     getRootProps: () => ({
       ref: (element: HTMLElement | null) =>
         element && manager.registerRoot(element),

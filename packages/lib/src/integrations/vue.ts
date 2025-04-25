@@ -46,6 +46,10 @@ export const useTimescape = (options: Options = {}) => {
       (type: DateType) => (element: Element | ComponentPublicInstance | null) =>
         element instanceof HTMLInputElement &&
         manager.registerElement(element, type),
+    registerSelect:
+      (type: DateType) => (element: Element | ComponentPublicInstance | null) =>
+        element instanceof HTMLSelectElement &&
+        manager.registerSelect(element, type),
     registerRoot: () => (element: Element | ComponentPublicInstance | null) => {
       element instanceof HTMLElement && manager.registerRoot(element);
     },

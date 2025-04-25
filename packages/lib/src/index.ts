@@ -34,7 +34,20 @@ type RegistryEntry = {
   isUnset: boolean;
   listeners: Array<() => void>;
 };
-type Registry = Map<DateType, RegistryEntry>;
+
+type SelectRegistryEntry = {
+  type: DateType;
+  selectElement: HTMLSelectElement;
+  listeners: Array<() => void>;
+};
+
+type Registry = Map<DateType, RegistryEntry | SelectRegistryEntry>;
+
+const isInputEntry = (entry: RegistryEntry | SelectRegistryEntry): entry is RegistryEntry => 
+  'inputElement' in entry;
+
+const isSelectEntry = (entry: RegistryEntry | SelectRegistryEntry): entry is SelectRegistryEntry => 
+  'selectElement' in entry;
 
 export const $NOW = "$NOW" as const;
 export type $NOW = typeof $NOW;
@@ -75,7 +88,6 @@ export class TimescapeManager implements Options {
 
   #instanceId = Math.random().toString(36).slice(2);
   #timestamp: number | undefined;
-  // The previous timestamp is used to render partial dates when a field has been cleared.
   #prevTimestamp: number | undefined;
   #registry: Registry = new Map();
   #pubsub: ReturnType<typeof createPubSub<Events>>;
@@ -86,12 +98,12 @@ export class TimescapeManager implements Options {
     typeof window !== "undefined"
       ? new ResizeObserver((entries) => {
           entries.forEach((entry) => {
-            const inputElement = [...this.#registry.values()].find(
-              ({ shadowElement }) => shadowElement === entry.target,
-            )?.inputElement;
+            const registryEntry = [...this.#registry.values()].find(
+              (registryEntry) => isInputEntry(registryEntry) && registryEntry.shadowElement === entry.target,
+            );
 
-            if (!inputElement || !entry.contentBoxSize[0]?.inlineSize) return;
-            inputElement.style.width = `${entry.contentBoxSize[0].inlineSize}px`;
+            if (!registryEntry || !isInputEntry(registryEntry) || !entry.contentBoxSize[0]?.inlineSize) return;
+            registryEntry.inputElement.style.width = `${entry.contentBoxSize[0].inlineSize}px`;
           });
         })
       : undefined;
@@ -160,12 +172,10 @@ export class TimescapeManager implements Options {
         }
         return original;
       },
-      // biome-ignore lint/suspicious/noExplicitAny: nextValue can be any
       set: (target: this, property: keyof this & string, nextValue: any) => {
         switch (property) {
           case "minDate":
           case "maxDate":
-            // minDate and maxDate are also calling updateDate to validate the date
             target[property] = nextValue;
             if (target.#timestamp) {
               target.#setDate(new Date(target.#timestamp));
@@ -239,7 +249,7 @@ export class TimescapeManager implements Options {
     domExists = false,
   ) {
     const registryEntry = this.#registry.get(type);
-    if (!domExists && element === registryEntry?.inputElement) {
+    if (!domExists && isInputEntry(registryEntry) && element === registryEntry?.inputElement) {
       return;
     }
 
@@ -288,7 +298,7 @@ export class TimescapeManager implements Options {
       sibling.dataset.timescapeShadow === type
     ) {
       shadowElement = sibling;
-    } else if (!domExists || !registryEntry?.shadowElement) {
+    } else if (!domExists || !isInputEntry(registryEntry) || !registryEntry?.shadowElement) {
       shadowElement = document.createElement("span");
       shadowElement.setAttribute("aria-hidden", "true");
       shadowElement.textContent = element.value || element.placeholder;
@@ -326,32 +336,148 @@ export class TimescapeManager implements Options {
     return element;
   }
 
+  public registerSelect(
+    element: HTMLSelectElement,
+    type: DateType,
+    domExists = false,
+  ) {
+    const registryEntry = this.#registry.get(type);
+    if (!domExists && isSelectEntry(registryEntry) && element === registryEntry?.selectElement) {
+      return;
+    }
+
+    element.tabIndex = 0;
+    element.setAttribute("role", "combobox");
+    element.dataset.timescapeSelect = "";
+
+    const options = this.#getSelectOptions(type);
+    element.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join('');
+
+    this.#registry.set(type, {
+      type,
+      selectElement: element,
+      listeners: this.#createSelectListeners(element, type),
+    } satisfies SelectRegistryEntry);
+
+    this.on("changeDate", () => this.#syncSelect(element));
+    this.#syncSelect(element);
+
+    return element;
+  }
+
+  #getSelectOptions(type: DateType): Array<{ value: string; label: string }> {
+    switch (type) {
+      case "days":
+        return Array.from({ length: 31 }, (_, i) => ({
+          value: String(i + 1).padStart(2, '0'),
+          label: String(i + 1).padStart(2, '0'),
+        }));
+      case "months":
+        return Array.from({ length: 12 }, (_, i) => ({
+          value: String(i + 1).padStart(2, '0'),
+          label: String(i + 1).padStart(2, '0'),
+        }));
+      case "years":
+        return Array.from({ length: 100 }, (_, i) => {
+          const year = new Date().getFullYear() - 50 + i;
+          return {
+            value: String(year),
+            label: String(year),
+          };
+        });
+      case "hours":
+        return Array.from({ length: 24 }, (_, i) => ({
+          value: String(i).padStart(2, '0'),
+          label: String(i).padStart(2, '0'),
+        }));
+      case "minutes":
+      case "seconds":
+        return Array.from({ length: 60 }, (_, i) => ({
+          value: String(i).padStart(2, '0'),
+          label: String(i).padStart(2, '0'),
+        }));
+      case "am/pm":
+        return [
+          { value: "am", label: "AM" },
+          { value: "pm", label: "PM" },
+        ];
+    }
+  }
+
+  #createSelectListeners(element: HTMLSelectElement, type: DateType) {
+    const listeners = [
+      addElementListener(element, "change", (e) => {
+        const value = (e.target as HTMLSelectElement).value;
+        if (type === "am/pm") {
+          this.#setDate(toggleAmPm(this.#currentDate, value as "am" | "pm"));
+        } else {
+          const numValue = parseInt(value, 10);
+          if (type === "months") {
+            this.#setDate(set(this.#currentDate, type, numValue - 1));
+          } else {
+            this.#setDate(set(this.#currentDate, type, numValue));
+          }
+        }
+        this.#syncAllElements();
+      }),
+    ];
+
+    return listeners;
+  }
+
+  #syncSelect(element: HTMLSelectElement) {
+    const entry = this.#findBySelectElement(element);
+    if (!entry || !isSelectEntry(entry)) return;
+
+    const { type } = entry;
+    const value = this.#getValue(type);
+
+    if (element.value === value) return;
+
+    element.value = value;
+    element.setAttribute("aria-label", type);
+  }
+
+  #findBySelectElement = (select: HTMLElement | EventTarget | null) =>
+    [...this.#registry.values()].find(
+      (entry) => isSelectEntry(entry) && entry.selectElement === select,
+    );
+
   /**
    * Returns whether all fields are filled out. Can only be false in partial mode.
    * @returns {boolean}
    */
   public isCompleted(): boolean {
-    return !this.disallowPartial
-      ? [...this.#registry.values()].every((e) => !e.isUnset)
-      : true;
+    return [...this.#registry.values()].every((entry) => 
+      isInputEntry(entry) ? !entry.isUnset : true
+    );
   }
 
   public remove() {
+    for (const entry of this.#registry.values()) {
+      if (isInputEntry(entry)) {
+        entry.listeners.forEach((remove) => remove());
+        entry.shadowElement.remove();
+      } else if (isSelectEntry(entry)) {
+        entry.listeners.forEach((remove) => remove());
+      }
+    }
+    this.#registry.clear();
     this.#rootListener?.();
-    this.#registry.forEach(({ shadowElement, listeners }) => {
-      listeners.forEach((remove) => remove());
-      shadowElement.remove();
-    });
-    this.#pubsub.events = {};
     this.#resizeObserver?.disconnect();
     this.#mutationObserver?.disconnect();
   }
 
   public focusField(which = 0) {
     const entries = [...this.#registry.values()];
-    const type = entries.at(which)?.type;
+    const entry = entries.at(which);
+    if (!entry) return;
 
-    type && this.#registry.get(type)?.inputElement.focus();
+    if (isInputEntry(entry)) {
+      entry.inputElement.focus();
+    } else if (isSelectEntry(entry)) {
+      entry.selectElement.focus();
+    }
   }
 
   public on<E extends keyof Events>(event: E, callback: Callback<Events[E]>) {
@@ -360,7 +486,7 @@ export class TimescapeManager implements Options {
 
   #findByInputElement = (input: HTMLElement | EventTarget | null) =>
     [...this.#registry.values()].find(
-      ({ inputElement }) => inputElement === input,
+      (entry) => isInputEntry(entry) && entry.inputElement === input,
     );
 
   #copyStyles = (from: HTMLElement, to: HTMLElement) => {
@@ -422,7 +548,6 @@ export class TimescapeManager implements Options {
 
     let date = this.#currentDate;
 
-    // doesn't make sense to wrap these around
     if (type === "years" || type === "am/pm") {
       return add(date, "years", step);
     }
@@ -585,7 +710,6 @@ export class TimescapeManager implements Options {
             if (this.#cursorPosition === 0) {
               setIntermediateValue(key);
 
-              // When the user types a number greater than 3, we can assume they're done typing the day
               if (number > 3) {
                 setValue("days", number);
                 this.#focusNextField(type);
@@ -593,7 +717,6 @@ export class TimescapeManager implements Options {
                 this.#cursorPosition = 1;
               }
             } else {
-              // Between 1 and days in month for the current year
               const finalValue = Math.max(
                 1,
                 Math.min(
@@ -609,7 +732,6 @@ export class TimescapeManager implements Options {
             if (this.#cursorPosition === 0) {
               setIntermediateValue(key);
 
-              // When the user types a number greater than 1, we can assume they're done typing the month
               if (number > 1) {
                 setValue("months", number - 1);
                 this.#focusNextField(type);
@@ -619,8 +741,6 @@ export class TimescapeManager implements Options {
             } else {
               const finalValue = Math.max(
                 0,
-                // Subtract 1 because JS months are 0-based
-                // Prevent negative so years are not wrapped around
                 Math.min(Number(intermediateValue + key), 12) - 1,
               );
               setValue("months", finalValue);
@@ -629,12 +749,10 @@ export class TimescapeManager implements Options {
             break;
           case "years":
             if (this.#cursorPosition < 4) {
-              // Append the new digit and shift the digits to the left
               const newValue = intermediateValue + key;
               setIntermediateValue(newValue);
               this.#cursorPosition += 1;
 
-              // When we have 4 digits, update the actual year
               if (this.#cursorPosition === 4) {
                 setValue("years", Number(newValue));
                 this.#focusNextField(type);
@@ -648,9 +766,7 @@ export class TimescapeManager implements Options {
               setIntermediateValue(key);
 
               const maxFirstDigit = this.hour12 ? 1 : 2;
-              // When the user types a number greater than 1/2 , we can assume they're done typing the hours
               if (number > maxFirstDigit) {
-                // If the current time is PM, we need to add 12 to the hours to keep it PM
                 setValue("hours", this.hour12 && isPM ? number + 12 : number);
                 this.#focusNextField(type);
                 break;
@@ -663,7 +779,6 @@ export class TimescapeManager implements Options {
 
               let finalValue = inputValue > maxHours ? number : inputValue;
 
-              // Keep AM/PM like before
               if (this.hour12) {
                 const date = set(this.#currentDate, "hours", finalValue);
                 finalValue = toggleAmPm(date, isPM ? "pm" : "am").getHours();
@@ -679,7 +794,6 @@ export class TimescapeManager implements Options {
             if (this.#cursorPosition === 0) {
               setIntermediateValue(key);
 
-              // When the user types a number greater than 5, we can assume they're done typing the minutes
               if (number > 5) {
                 setValue(type, number);
                 this.#focusNextField(type);
@@ -729,8 +843,6 @@ export class TimescapeManager implements Options {
     });
   }
 
-  // Because the order of insertion is important for which field is selected when tabbing,
-  // we need to sort the registry by the order of the input elements in the DOM.
   #sortRegistryByElements() {
     this.#registry = new Map(
       [...this.#registry.entries()].sort(([, a], [, b]) =>
@@ -743,16 +855,20 @@ export class TimescapeManager implements Options {
   }
 
   #syncAllElements() {
-    this.#registry.forEach((entry) => this.#syncElement(entry.inputElement));
+    for (const entry of this.#registry.values()) {
+      if (isInputEntry(entry)) {
+        this.#syncElement(entry.inputElement);
+      } else if (isSelectEntry(entry)) {
+        this.#syncSelect(entry.selectElement);
+      }
+    }
   }
 
   #syncElement(element: HTMLInputElement) {
     const entry = this.#findByInputElement(element);
-
-    if (!entry) return;
+    if (!entry || !isInputEntry(entry)) return;
 
     const { type, shadowElement } = entry;
-
     const value = this.#getValue(type);
 
     if (element.value === value) return;
@@ -761,7 +877,6 @@ export class TimescapeManager implements Options {
     element.setAttribute("aria-label", type);
 
     if (type !== "am/pm") {
-      // removes leading zeroes
       element.setAttribute("aria-valuenow", value.replace(/^0/, ""));
       element.setAttribute(
         "aria-valuemin",
@@ -856,24 +971,24 @@ export class TimescapeManager implements Options {
    *
    * @returns {Boolean} Whether the next field was focused or not
    */
-  #focusNextField(type: DateType, offset = 1, wrap?: boolean): boolean {
-    const types = [...this.#registry.keys()];
-    const index = types.indexOf(type);
+  #focusNextField(currentType: DateType, offset = 1, wrap = false) {
+    const entries = [...this.#registry.entries()];
+    const currentIndex = entries.findIndex(([type]) => type === currentType);
+    if (currentIndex === -1) return false;
 
     const nextIndex = wrap
-      ? types[(index + offset + types.length) % types.length]
-      : types[index + offset];
-    if (nextIndex) this.#registry.get(nextIndex)?.inputElement.focus();
+      ? (currentIndex + offset + entries.length) % entries.length
+      : currentIndex + offset;
 
-    if (
-      wrap &&
-      ((index === 0 && offset <= -1) ||
-        (index === types.length - 1 && offset >= 1))
-    ) {
-      this.#pubsub.emit("focusWrap", offset === -1 ? "start" : "end");
+    if (nextIndex < 0 || nextIndex >= entries.length) return false;
+
+    const [, nextEntry] = entries[nextIndex];
+    if (isInputEntry(nextEntry)) {
+      nextEntry.inputElement.focus();
+    } else if (isSelectEntry(nextEntry)) {
+      nextEntry.selectElement.focus();
     }
-
-    return !!nextIndex;
+    return true;
   }
 }
 

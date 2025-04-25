@@ -42,6 +42,10 @@ export const useTimescape = (options: Options = {}) => {
       ref: (element: HTMLInputElement | null) =>
         element && manager.registerElement(element, type),
     }),
+    getSelectProps: (type: DateType) => ({
+      ref: (element: HTMLSelectElement | null) =>
+        element && manager.registerSelect(element, type),
+    }),
     getRootProps: () => ({
       ref: (element: HTMLElement | null) =>
         element && manager.registerRoot(element),

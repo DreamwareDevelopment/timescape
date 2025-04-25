@@ -97,6 +97,18 @@ export const useTimescape = (options: ReactOptions = {}) => {
         if (opts?.ref) opts.ref.current = element;
       },
     }),
+    getSelectProps: (
+      type: DateType,
+      opts?: {
+        ref?: MutableRefObject<HTMLSelectElement | null>;
+      },
+    ) => ({
+      ref: (element: HTMLSelectElement | null) => {
+        if (!element) return;
+        manager.registerSelect(element, type);
+        if (opts?.ref) opts.ref.current = element;
+      },
+    }),
     getRootProps: () => ({
       ref: (element: HTMLElement | null) =>
         element && manager.registerRoot(element),
