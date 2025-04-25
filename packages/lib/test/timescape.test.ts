@@ -1201,4 +1201,147 @@ describe("timescape", () => {
       expect(getByTestId(container, "from-years")).toHaveValue("2024");
     });
   });
+
+  describe("select support", () => {
+    it("should register select elements correctly", () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      container.innerHTML = `
+        <div data-testid="root">
+          <select data-testid="months"></select>
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const select = getByTestId<HTMLSelectElement>(container, "months");
+
+      manager.registerRoot(root);
+      manager.registerSelect(select, "months");
+
+      expect(select.options.length).toBe(12);
+      expect(select.value).toBe("01");
+    });
+
+    it("should update select values when date changes", () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      container.innerHTML = `
+        <div data-testid="root">
+          <select data-testid="months"></select>
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const select = getByTestId<HTMLSelectElement>(container, "months");
+
+      manager.registerRoot(root);
+      manager.registerSelect(select, "months");
+
+      manager.date = new Date("2021-06-01");
+      expect(select.value).toBe("06");
+    });
+
+    it("should update date when select value changes", async () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      container.innerHTML = `
+        <div data-testid="root">
+          <select data-testid="months"></select>
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const select = getByTestId<HTMLSelectElement>(container, "months");
+
+      manager.registerRoot(root);
+      manager.registerSelect(select, "months");
+
+      select.value = "06";
+      fireEvent.change(select);
+
+      expect(manager.date?.getMonth()).toBe(5); // 0-based month
+    });
+
+    it("should support keyboard navigation with select elements", async () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      container.innerHTML = `
+        <div data-testid="root">
+          <input data-testid="years" />
+          <select data-testid="months"></select>
+          <input data-testid="days" />
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const years = getByTestId<HTMLInputElement>(container, "years");
+      const months = getByTestId<HTMLSelectElement>(container, "months");
+      const days = getByTestId<HTMLInputElement>(container, "days");
+
+      manager.registerRoot(root);
+      manager.registerElement(years, "years");
+      manager.registerSelect(months, "months");
+      manager.registerElement(days, "days");
+
+      years.focus();
+      await user.keyboard("{ArrowRight}");
+      expect(months).toHaveFocus();
+
+      await user.keyboard("{ArrowRight}");
+      expect(days).toHaveFocus();
+
+      await user.keyboard("{ArrowLeft}");
+      expect(months).toHaveFocus();
+    });
+
+    it("should support am/pm select element", () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      manager.hour12 = true;
+      container.innerHTML = `
+        <div data-testid="root">
+          <select data-testid="ampm"></select>
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const select = getByTestId<HTMLSelectElement>(container, "ampm");
+
+      manager.registerRoot(root);
+      manager.registerSelect(select, "am/pm");
+
+      expect(select.options).toBeDefined();
+      expect(select.options.length).toBe(2);
+      expect(select.options[0]?.value).toBe("am");
+      expect(select.options[1]?.value).toBe("pm");
+    });
+
+    it("should update am/pm when select value changes", async () => {
+      container = document.createElement("div");
+      manager = new TimescapeManager();
+      manager.hour12 = true;
+      container.innerHTML = `
+        <div data-testid="root">
+          <select data-testid="ampm"></select>
+        </div>
+      `;
+      document.body.appendChild(container);
+
+      const root = getByTestId(container, "root");
+      const select = getByTestId<HTMLSelectElement>(container, "ampm");
+
+      manager.registerRoot(root);
+      manager.registerSelect(select, "am/pm");
+
+      select.value = "pm";
+      fireEvent.change(select);
+
+      expect(manager.date?.getHours()).toBeGreaterThanOrEqual(12);
+    });
+  });
 });
